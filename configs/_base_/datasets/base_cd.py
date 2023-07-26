@@ -1,6 +1,6 @@
 # dataset settings
 dataset_type = 'TXTCDDataset'
-data_root = r'data/LEVIRCD'
+data_root = 'data/cd'
 
 albu_train_transforms = [
     dict(type='RandomBrightnessContrast', p=0.2),
