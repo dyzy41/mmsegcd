@@ -2,7 +2,7 @@ _base_ = [
     '../_base_/datasets/base_cd.py',
     '../_base_/default_runtime.py', '../_base_/schedules/schedule_20k.py'
 ]
-data_root = 'data/CDD'
+data_root = 'data/whucd'
 metainfo = dict(
                 classes=('background', 'building'),
                 palette=[[0, 0, 0], [255, 255, 255]])
@@ -18,7 +18,7 @@ data_preprocessor = dict(
 backbone_norm_cfg = dict(type='LN', requires_grad=True)
 
 model = dict(
-    type='EncoderDecoderISA',
+    type='EncoderDecoderCDLoss',
     data_preprocessor=data_preprocessor,
     pretrained=None,
     backbone=dict(
@@ -47,20 +47,22 @@ model = dict(
         out_channels=256,
         num_outs=4),
     decode_head=dict(
-        type='FPNHead',
+        type='FPNHeadCDLoss',
         in_channels=[256, 256, 256, 256],
         in_index=[0, 1, 2, 3],
         feature_strides=[4, 8, 16, 32],
         channels=128,
         dropout_ratio=0.1,
         num_classes=2,
+        out_channels=1,
         norm_cfg=norm_cfg,
         align_corners=False,
-        loss_decode=dict(
-            type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0)),
+        loss_decode=[dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
+                     dict(type='CDLoss', use_sigmoid=True, loss_weight=0.5, class_weight=[0.5, 0.5])]),
     auxiliary_head=dict(
         type='FCNHead',
         num_classes=2,
+        out_channels=1,
         in_channels=256,
         in_index=2,
         channels=256,
@@ -70,7 +72,7 @@ model = dict(
         norm_cfg=norm_cfg,
         align_corners=False,
         loss_decode=dict(
-            type='CrossEntropyLoss', use_sigmoid=False, loss_weight=0.4)),
+            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=0.4)),
     # model training and testing settings
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
@@ -104,8 +106,8 @@ param_scheduler = [
 ]
 
 train_dataloader = dict(
-    batch_size=32,
-    num_workers=16,
+    batch_size=4,
+    num_workers=2,
     dataset=dict(
         data_root=data_root,
         metainfo=metainfo,
@@ -120,7 +122,7 @@ val_dataloader = dict(
 test_dataloader = val_dataloader
 
 # training schedule for 20k
-train_cfg = dict(type='IterBasedTrainLoop', max_iters=60000, val_interval=500)
+train_cfg = dict(type='IterBasedTrainLoop', max_iters=60000, val_interval=1000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(

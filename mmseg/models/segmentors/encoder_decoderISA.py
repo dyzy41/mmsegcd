@@ -10,6 +10,8 @@ from mmseg.utils import (ConfigType, OptConfigType, OptMultiConfig,
                          OptSampleList, SampleList, add_prefix)
 from .base import BaseSegmentor
 import torch
+from mmseg.models.utils.se_layer import SELayer
+from mmcv.cnn import ConvModule
 
 
 @MODELS.register_module()
@@ -94,7 +96,14 @@ class EncoderDecoderISA(BaseSegmentor):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
+        self.ca0 = nn.Sequential(SELayer(192), ConvModule(192, 96, kernel_size=3, padding=1))
+        self.ca1 = nn.Sequential(SELayer(384), ConvModule(384, 192, kernel_size=3, padding=1))
+        self.ca2 = nn.Sequential(SELayer(768), ConvModule(768, 384, kernel_size=3, padding=1))
+        self.ca3 = nn.Sequential(SELayer(1536), ConvModule(1536, 768, kernel_size=3, padding=1))
+        self.ca = [self.ca0, self.ca1, self.ca2, self.ca3]
+
         assert self.with_decode_head
+
 
     def _init_decode_head(self, decode_head: ConfigType) -> None:
         """Initialize ``decode_head``"""
@@ -115,8 +124,22 @@ class EncoderDecoderISA(BaseSegmentor):
 
     def extract_feat(self, inputs: Tensor) -> List[Tensor]:
         """Extract features from images."""
-        x = self.backbone(inputs)
-        x = [torch.cat([x[i][:, :, :x[i].size()[2]//2, :], x[i][:, :, x[i].size()[2]//2:, :]], dim=1) for i in range(len(x))]
+        inputsA = inputs[:, :3, :, :]
+        inputsB = inputs[:, 3:, :, :]
+        inputsAB = torch.cat([inputsA, inputsB], dim=2)
+
+        x = self.backbone(inputsAB)
+        xA = self.backbone(inputsA)
+        xB = self.backbone(inputsB)
+
+        xA = [torch.cat([xA[i], x[i][:, :, :x[i].size()[2]//2, :]], dim=1) for i in range(len(x))]
+        xB = [torch.cat([xB[i], x[i][:, :, x[i].size()[2]//2:, :]], dim=1) for i in range(len(x))]
+
+        xA = [self.ca[i](xA[i]) for i in range(len(xA))]
+        xB = [self.ca[i](xB[i]) for i in range(len(xB))]
+
+        x = [torch.cat([xA[i], xB[i]], dim=1) for i in range(len(xA))]
+
         if self.with_neck:
             x = self.neck(x)
         return x
@@ -125,11 +148,7 @@ class EncoderDecoderISA(BaseSegmentor):
                       batch_img_metas: List[dict]) -> Tensor:
         """Encode images with backbone and decode into a semantic segmentation
         map of the same size as input."""
-        inputsA = inputs[:, :3, :, :]
-        inputsB = inputs[:, 3:, :, :]
-        xA = self.extract_feat(inputsA)
-        xB = self.extract_feat(inputsB)
-        x = [xA[i]+xB[i] for i in range(len(xA))]
+        x = self.extract_feat(inputs)
         seg_logits = self.decode_head.predict(x, batch_img_metas,
                                               self.test_cfg)
 
@@ -174,13 +193,8 @@ class EncoderDecoderISA(BaseSegmentor):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-    
-        inputsA = inputs[:, :3, :, :]
-        inputsB = inputs[:, 3:, :, :]
-        inputsAB = torch.cat([inputsA, inputsB], dim=2)
-        x = self.extract_feat(inputsAB)
+        x = self.extract_feat(inputs)
         
-
         losses = dict()
 
         loss_decode = self._decode_head_forward_train(x, data_samples)
@@ -243,11 +257,7 @@ class EncoderDecoderISA(BaseSegmentor):
         Returns:
             Tensor: Forward output of model without any post-processes.
         """
-        inputsA = inputs[:, :3, :, :]
-        inputsB = inputs[:, 3:, :, :]
-        xA = self.extract_feat(inputsA)
-        xB = self.extract_feat(inputsB)
-        x = [xA[i]+xB[i] for i in range(len(xA))]
+        x = self.extract_feat(inputs)
         return self.decode_head.forward(x)
 
     def slide_inference(self, inputs: Tensor,
